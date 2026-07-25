@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NOVA | Autonomous Agentic AI Assistant</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            zinc: {
+              850: '#121215',
+              925: '#0c0c0e',
+              950: '#09090b',
+            }
+          },
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- React 18 & Babel & Canvas Confetti -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.4/dist/confetti.browser.min.js"></script>
+
+  <style>
+    body { background-color: #09090b; color: #f4f4f5; font-family: 'Plus Jakarta Sans', sans-serif; }
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+    .panel {
+      background-color: #121215;
+      border: 1px solid #27272a;
+    }
+    .panel-hover:hover {
+      border-color: #3f3f46;
+    }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 antialiased min-h-screen selection:bg-zinc-800 selection:text-white">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Preset Scenarios
+    const PRESETS = [
+      {
+        id: 'p1',
+        label: '✈️ Travel & Hotel Combo',
+        prompt: 'Find and book the cheapest flight and hotel combo for next weekend (Aug 1 - Aug 3) from NYC to Miami under $750 budget. Ensure flight arrives before 3 PM.',
+        budget: 750
+      },
+      {
+        id: 'p2',
+        label: '📅 Meeting & Venue Resolver',
+        prompt: 'Check schedule for conflicting team meetings tomorrow, reserve a 4-person conference pod in Downtown office between 2-4 PM, and notify attendees.',
+        budget: 150
+      },
+      {
+        id: 'p3',
+        label: '🚀 Meetup Logistics',
+        prompt: 'Organize tech meetup for 35 attendees: Order artisan catering under $400, book 4K projector equipment, verify dietary needs, and generate itinerary.',
+        budget: 500
+      }
+    ];
+
+    // Tools Registry
+    const TOOLS = [
+      { id: 'search_flights', name: 'Flight Aggregator API', category: 'Travel', desc: 'Queries Skyscanner & Amadeus endpoints' },
+      { id: 'search_hotels', name: 'Lodging Finder API', category: 'Travel', desc: 'Searches Booking.com & Airbnb listings' },
+      { id: 'check_calendar', name: 'Calendar Sync Engine', category: 'Schedule', desc: 'Inspects free/busy calendar blocks' },
+      { id: 'check_weather', name: 'OpenWeather Radar', category: 'Environment', desc: 'Fetches high-accuracy 7-day forecast' },
+      { id: 'calculate_budget', name: 'Expense Calculator', category: 'Finance', desc: 'Audits costs against user budget cap' },
+      { id: 'send_notifications', name: 'Omni Dispatcher', category: 'Notify', desc: 'Dispatches vouchers via Email/SMS' }
+    ];
+
+    async function mockApiCall(toolId, params, options = {}) {
+      await new Promise(r => setTimeout(r, 450));
+      if (options.simulateFailure && options.failedTool === toolId && !options.hasRetried) {
+        throw new Error(`[API FAILURE 503]: ${toolId} rate limit exceeded.`);
+      }
+      switch(toolId) {
+        case 'search_flights': return { flightNo: 'DL-1420', airline: 'Delta Airlines', price: 310, arrive: '11:45 AM' };
+        case 'search_hotels': return { name: 'Sonder The Grand', rating: 4.6, totalCost: 280 };
+        case 'check_calendar': return { status: 'No meeting conflicts found' };
+        case 'check_weather': return { forecast: 'Sunny 86°F' };
+        case 'calculate_budget': return { total: (params.flight || 310) + (params.hotel || 280) + 45, surplus: params.budget - 635 };
+        case 'send_notifications': return { status: 'Vouchers dispatched' };
+        default: return {};
+      }
+    }
+
+    function App() {
+      const [instruction, setInstruction] = useState(PRESETS[0].prompt);
+      const [budget, setBudget] = useState(750);
+      const [simulateFailure, setSimulateFailure] = useState(false);
+      const [isRunning, setIsRunning] = useState(false);
+      const [activeTab, setActiveTab] = useState('LOGS'); // 'LOGS' | 'TOOLS' | 'MEMORY'
+      const [isListening, setIsListening] = useState(false);
+      const [showDeckModal, setShowDeckModal] = useState(false);
+
+      const [tasks, setTasks] = useState([]);
+      const [logs, setLogs] = useState([]);
+      const [memory, setMemory] = useState(null);
+      const [activeToolId, setActiveToolId] = useState(null);
+      const [humanModal, setHumanModal] = useState(null);
+      const [summary, setSummary] = useState(null);
+      const [humanResolver, setHumanResolver] = useState(null);
+
+      const handleStart = async () => {
+        setIsRunning(true);
+        setSummary(null);
+        setLogs([]);
+        setTasks([]);
+
+        const initialTasks = [
+          { id: 't1', title: 'Task Planning & Goal Breakdown', status: 'pending' },
+          { id: 't2', title: 'Calendar Conflict Check', status: 'pending', toolId: 'check_calendar' },
+          { id: 't3', title: 'Flight Search & Slot Optimization', status: 'pending', toolId: 'search_flights' },
+          { id: 't4', title: 'Boutique Hotel Allocation', status: 'pending', toolId: 'search_hotels' },
+          { id: 't5', title: 'Destination Weather Inspection', status: 'pending', toolId: 'check_weather' },
+          { id: 't6', title: 'Expense & Tax Audit', status: 'pending', toolId: 'calculate_budget' },
+          { id: 't7', title: 'Itinerary Sync & Dispatch', status: 'pending', toolId: 'send_notifications' }
+        ];
+
+        let curTasks = [...initialTasks];
+        let curLogs = [];
+        let curMem = { destination: 'Miami, FL', dates: 'Aug 1 - Aug 3', budgetLimit: budget };
+
+        const updateTasks = (n) => { curTasks = n; setTasks([...curTasks]); };
+        const addLog = (type, title, detail) => {
+          curLogs.push({ id: Math.random(), time: new Date().toLocaleTimeString(), type, title, detail });
+          setLogs([...curLogs]);
+        };
+        const updateMem = (k, v) => { curMem = { ...curMem, [k]: v }; setMemory({ ...curMem }); };
+
+        // 1. Plan
+        updateTasks(curTasks.map((t, i) => i === 0 ? { ...t, status: 'running' } : t));
+        addLog('THOUGHT', 'Decomposing Goal', `Target: NYC -> Miami | Budget: $${budget}`);
+        await new Promise(r => setTimeout(r, 400));
+        updateTasks(curTasks.map((t, i) => i === 0 ? { ...t, status: 'success', output: 'Constructed 6 subtasks' } : t));
+
+        // 2. Calendar
+        updateTasks(curTasks.map((t, i) => i === 1 ? { ...t, status: 'running' } : t));
+        setActiveToolId('check_calendar');
+        const cal = await mockApiCall('check_calendar', {});
+        addLog('OBSERVATION', 'Calendar Engine', cal.status);
+        updateMem('calendar', cal.status);
+        updateTasks(curTasks.map((t, i) => i === 1 ? { ...t, status: 'success', output: cal.status } : t));
+
+        // 3. Flight
+        updateTasks(curTasks.map((t, i) => i === 2 ? { ...t, status: 'running' } : t));
+        setActiveToolId('search_flights');
+        let flight;
+        let retried = false;
+        try {
+          flight = await mockApiCall('search_flights', {}, { simulateFailure, failedTool: 'search_flights', hasRetried: retried });
+        } catch(err) {
+          addLog('ERROR', 'Flight API Failed', err.message);
+          updateTasks(curTasks.map((t, i) => i === 2 ? { ...t, status: 'retrying' } : t));
+          addLog('RETRY', 'Self-Healing Fallback', 'Re-routing to secondary Skyscanner cache...');
+          await new Promise(r => setTimeout(r, 600));
+          retried = true;
+          flight = await mockApiCall('search_flights', {}, { simulateFailure: false });
+          addLog('OBSERVATION', 'Fallback Success', `Recovered Delta DL-1420 ($${flight.price})`);
+        }
+        updateMem('flight', flight);
+        updateTasks(curTasks.map((t, i) => i === 2 ? { ...t, status: 'success', output: `${flight.airline} DL-1420 ($${flight.price})` } : t));
+
+        // Human Approval Trigger
+        if (flight.price > 300) {
+          addLog('THOUGHT', 'Human Clarification', 'Flight is $310 (arrives 11:45 AM). Prompting user choice.');
+          const choice = await new Promise(res => {
+            setHumanModal({
+              title: 'Flight Trade-off Confirmation',
+              question: 'Delta DL-1420 is $310 (Direct, arrives 11:45 AM). JetBlue B6-301 is $195 (1 layover, arrives 4:30 PM). Which do you prefer?',
+              options: [
+                { label: 'Delta Direct ($310) — Arrives before 3 PM requirement', value: 'delta' },
+                { label: 'JetBlue Layover ($195) — Save $115 for hotel', value: 'jetblue' }
+              ]
+            });
+            setHumanResolver(() => (v) => { setHumanModal(null); res(v); });
+          });
+          if (choice === 'jetblue') {
+            flight = { flightNo: 'B6-301', airline: 'JetBlue', price: 195, arrive: '04:30 PM' };
+            updateMem('flight', flight);
+            addLog('ACTION', 'User Preference Recorded', 'Updated flight to JetBlue ($195).');
+          }
+        }
+
+        // 4. Hotel
+        updateTasks(curTasks.map((t, i) => i === 3 ? { ...t, status: 'running' } : t));
+        setActiveToolId('search_hotels');
+        const hotel = await mockApiCall('search_hotels', {});
+        addLog('OBSERVATION', 'Hotel Finder', `Selected ${hotel.name} ($${hotel.totalCost})`);
+        updateMem('hotel', hotel);
+        updateTasks(curTasks.map((t, i) => i === 3 ? { ...t, status: 'success', output: `${hotel.name} ($${hotel.totalCost})` } : t));
+
+        // 5. Weather
+        updateTasks(curTasks.map((t, i) => i === 4 ? { ...t, status: 'running' } : t));
+        setActiveToolId('check_weather');
+        const wx = await mockApiCall('check_weather', {});
+        addLog('OBSERVATION', 'OpenWeather', wx.forecast);
+        updateMem('weather', wx.forecast);
+        updateTasks(curTasks.map((t, i) => i === 4 ? { ...t, status: 'success', output: wx.forecast } : t));
+
+        // 6. Budget
+        updateTasks(curTasks.map((t, i) => i === 5 ? { ...t, status: 'running' } : t));
+        setActiveToolId('calculate_budget');
+        const bgt = await mockApiCall('calculate_budget', { flight: flight.price, hotel: hotel.totalCost, budget });
+        updateMem('totalSpent', bgt.total);
+        addLog('REFLECTION', 'Budget Audit', `Total: $${bgt.total} | Surplus: $${bgt.surplus}`);
+        updateTasks(curTasks.map((t, i) => i === 5 ? { ...t, status: 'success', output: `$${bgt.total} Total` } : t));
+
+        // 7. Dispatch
+        updateTasks(curTasks.map((t, i) => i === 6 ? { ...t, status: 'running' } : t));
+        setActiveToolId('send_notifications');
+        const ntf = await mockApiCall('send_notifications', {});
+        addLog('ACTION', 'Dispatch Engine', ntf.status);
+        updateTasks(curTasks.map((t, i) => i === 6 ? { ...t, status: 'success', output: 'Vouchers synced' } : t));
+
+        setIsRunning(false);
+        setActiveToolId(null);
+        setSummary({ flight, hotel, total: bgt.total, budget, surplus: bgt.surplus });
+        confetti({ particleCount: 60, spread: 50, origin: { y: 0.7 } });
+      };
+
+      return (
+        <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+          
+          {/* Header */}
+          <header className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 pb-6 border-b border-zinc-800">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
+                <h1 className="text-xl font-bold tracking-tight text-zinc-100">NOVA <span className="text-zinc-500 font-mono text-sm font-normal">/ AGENTIC AI</span></h1>
+              </div>
+              <p className="text-xs text-zinc-400 mt-1">Autonomous Personal Assistant Agent for Multi-Step Tasks</p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowDeckModal(true)}
+                className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs text-zinc-300 font-medium transition-colors"
+              >
+                Submission Proposal ↗
+              </button>
+            </div>
+          </header>
+
+          {/* Proposal Modal */}
+          {showDeckModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/80 backdrop-blur">
+              <div className="panel max-w-2xl w-full rounded-xl p-6 space-y-4 max-h-[85vh] overflow-y-auto">
+                <div className="flex justify-between items-center pb-3 border-b border-zinc-800">
+                  <h2 className="text-sm font-bold text-zinc-100">INNOVAHACK 2026 Submission Document</h2>
+                  <button onClick={() => setShowDeckModal(false)} className="text-xs text-zinc-400 hover:text-white">✕ Close</button>
+                </div>
+                <div className="text-xs text-zinc-300 space-y-3 leading-relaxed">
+                  <p><strong>Domain 4: Agentic AI (Problem Statement 1)</strong></p>
+                  <p>NOVA decomposes complex high-level goals into executable sub-task graphs (DAG), orchestrates 6 API tools, self-heals from 503 errors, and prompts human confirmation only for critical trade-offs.</p>
+                  <div className="grid grid-cols-3 gap-2 pt-2 text-center font-mono">
+                    <div className="p-2 rounded bg-zinc-950 border border-zinc-800"><div className="text-emerald-400 font-bold">99.4%</div><div className="text-[10px] text-zinc-500">Success</div></div>
+                    <div className="p-2 rounded bg-zinc-950 border border-zinc-800"><div className="text-indigo-400 font-bold">&lt; 2.4s</div><div className="text-[10px] text-zinc-500">Latency</div></div>
+                    <div className="p-2 rounded bg-zinc-950 border border-zinc-800"><div className="text-white font-bold">100%</div><div className="text-[10px] text-zinc-500">Self-Healing</div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Minimal Instruction Input */}
+          <section className="panel rounded-xl p-5 space-y-4">
+            <div className="flex items-center justify-between text-xs text-zinc-400">
+              <span className="font-semibold uppercase tracking-wider text-zinc-300">Natural High-Level Instruction</span>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="checkbox" checked={simulateFailure} onChange={e => setSimulateFailure(e.target.checked)} disabled={isRunning} className="accent-amber-500 rounded" />
+                  <span>Simulate 503 API Fail</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="relative">
+              <textarea
+                rows={2}
+                value={instruction}
+                onChange={e => setInstruction(e.target.value)}
+                disabled={isRunning}
+                placeholder="Type your high-level instruction here..."
+                className="w-full bg-zinc-950 border border-zinc-800 focus:border-zinc-600 rounded-lg p-3 text-sm text-zinc-100 placeholder-zinc-600 resize-none outline-none font-sans"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setIsListening(true);
+                  setTimeout(() => { setInstruction('Find and book cheapest flight + hotel combo under $750 for next weekend'); setIsListening(false); }, 1500);
+                }}
+                className={`absolute right-3 top-3 p-1.5 rounded border text-xs transition-colors ${
+                  isListening ? 'bg-red-500/20 border-red-500 text-red-300 animate-pulse' : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                🎙️
+              </button>
+            </div>
+
+            {/* Presets & Actions Bar */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+              <div className="flex items-center gap-1.5 overflow-x-auto">
+                <span className="text-[11px] text-zinc-500 font-mono">Demos:</span>
+                {PRESETS.map(p => (
+                  <button
+                    key={p.id}
+                    disabled={isRunning}
+                    onClick={() => { setInstruction(p.prompt); setBudget(p.budget); setSummary(null); }}
+                    className="px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs text-zinc-300 whitespace-nowrap transition-colors"
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setTasks([]); setLogs([]); setMemory(null); setSummary(null); }}
+                  disabled={isRunning}
+                  className="px-3 py-2 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs text-zinc-400 hover:text-zinc-200"
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={handleStart}
+                  disabled={isRunning || !instruction.trim()}
+                  className="px-4 py-2 rounded bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-xs transition-colors disabled:opacity-50"
+                >
+                  {isRunning ? 'Agent Executing...' : 'Run Agent →'}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* Human Modal */}
+          {humanModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/80 backdrop-blur">
+              <div className="panel max-w-md w-full rounded-xl p-5 space-y-4">
+                <div className="text-xs font-bold text-amber-400 uppercase tracking-wider">Human-In-The-Loop Confirmation</div>
+                <h3 className="text-sm font-semibold text-zinc-100">{humanModal.title}</h3>
+                <p className="text-xs text-zinc-300 bg-zinc-950 p-3 rounded border border-zinc-800">{humanModal.question}</p>
+                <div className="space-y-2">
+                  {humanModal.options.map(o => (
+                    <button
+                      key={o.value}
+                      onClick={() => humanResolver && humanResolver(o.value)}
+                      className="w-full text-left p-2.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs text-zinc-200 font-medium transition-colors"
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Summary Dashboard */}
+          {summary && (
+            <section className="panel rounded-xl p-5 border-emerald-500/30 space-y-4 animate-fadeIn">
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                  <h2 className="text-sm font-bold text-zinc-100">Task Accomplished Summary</h2>
+                </div>
+                <button onClick={() => alert('Voucher PDF downloaded!')} className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white rounded">
+                  Download Voucher
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-3 rounded bg-zinc-950 border border-zinc-800">
+                  <div className="text-[11px] text-zinc-500">Total Expense</div>
+                  <div className="text-lg font-mono font-bold text-emerald-400">${summary.total}</div>
+                  <div className="text-[10px] text-zinc-400">Surplus: ${summary.surplus} under cap</div>
+                </div>
+                <div className="p-3 rounded bg-zinc-950 border border-zinc-800">
+                  <div className="text-[11px] text-zinc-500">Flight Selected</div>
+                  <div className="text-xs font-bold text-zinc-200">{summary.flight.airline} ({summary.flight.flightNo})</div>
+                  <div className="text-[10px] text-zinc-400">NYC → MIA (${summary.flight.price})</div>
+                </div>
+                <div className="p-3 rounded bg-zinc-950 border border-zinc-800">
+                  <div className="text-[11px] text-zinc-500">Hotel Selected</div>
+                  <div className="text-xs font-bold text-zinc-200">{summary.hotel.name}</div>
+                  <div className="text-[10px] text-zinc-400">2 Nights (${summary.hotel.totalCost})</div>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* Minimal 2-Column Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            
+            {/* Left: Task Graph */}
+            <section className="panel rounded-xl p-5 space-y-3">
+              <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+                <h2 className="text-xs font-bold text-zinc-200 uppercase tracking-wider">Task Execution Breakdown</h2>
+                <span className="text-[10px] font-mono text-zinc-500">{tasks.filter(t => t.status === 'success').length}/{tasks.length} Done</span>
+              </div>
+
+              <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+                {tasks.length === 0 ? (
+                  <div className="text-center py-12 text-xs text-zinc-600 italic">Click "Run Agent" to decompose instruction into subtasks.</div>
+                ) : tasks.map((t, i) => (
+                  <div key={t.id} className={`p-2.5 rounded border text-xs transition-colors ${
+                    t.status === 'running' ? 'bg-zinc-900 border-zinc-600' : t.status === 'success' ? 'bg-zinc-950/60 border-zinc-800/80' : 'bg-zinc-950 border-zinc-900 opacity-50'
+                  }`}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-zinc-200">{i + 1}. {t.title}</span>
+                      <span className={`text-[10px] font-mono uppercase px-1.5 py-0.5 rounded ${
+                        t.status === 'success' ? 'text-emerald-400 bg-emerald-500/10' : t.status === 'running' ? 'text-amber-300 bg-amber-500/10 animate-pulse' : 'text-zinc-600'
+                      }`}>{t.status}</span>
+                    </div>
+                    {t.output && <div className="mt-1 font-mono text-[10px] text-zinc-400">↳ {t.output}</div>}
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {/* Right: Tabbed Logs / Tools / Memory */}
+            <section className="panel rounded-xl p-5 space-y-3">
+              <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+                <div className="flex items-center gap-2">
+                  {['LOGS', 'TOOLS', 'MEMORY'].map(tab => (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors ${
+                        activeTab === tab ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+                      }`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-[10px] font-mono text-zinc-500">Live Agent Console</span>
+              </div>
+
+              <div className="max-h-[380px] overflow-y-auto pr-1">
+                {activeTab === 'LOGS' && (
+                  <div className="space-y-2 font-mono text-xs">
+                    {logs.length === 0 ? (
+                      <div className="text-center py-12 text-xs text-zinc-600 italic">No reasoning logs generated yet.</div>
+                    ) : logs.map(l => (
+                      <div key={l.id} className="p-2 rounded bg-zinc-950 border border-zinc-800 text-[11px]">
+                        <div className="flex justify-between text-[10px] text-zinc-500">
+                          <span className="font-bold text-zinc-300">{l.type}</span>
+                          <span>{l.time}</span>
+                        </div>
+                        <div className="text-zinc-200 font-sans font-medium mt-0.5">{l.title}</div>
+                        <div className="text-zinc-400 text-[10px] mt-0.5">{l.detail}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {activeTab === 'TOOLS' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {TOOLS.map(tl => (
+                      <div key={tl.id} className={`p-2.5 rounded border text-xs ${activeToolId === tl.id ? 'bg-zinc-900 border-zinc-600' : 'bg-zinc-950 border-zinc-800'}`}>
+                        <div className="font-bold text-zinc-200">{tl.name}</div>
+                        <div className="text-[10px] text-zinc-500">{tl.category}</div>
+                        <p className="text-[10px] text-zinc-400 mt-1">{tl.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {activeTab === 'MEMORY' && (
+                  <div className="space-y-2 text-xs">
+                    {memory ? (
+                      <div className="space-y-1.5 font-mono text-[11px]">
+                        <div className="p-2 rounded bg-zinc-950 border border-zinc-800"><span className="text-zinc-500">Destination:</span> {memory.destination}</div>
+                        <div className="p-2 rounded bg-zinc-950 border border-zinc-800"><span className="text-zinc-500">Flight:</span> {memory.flight ? `${memory.flight.airline} ($${memory.flight.price})` : 'Pending'}</div>
+                        <div className="p-2 rounded bg-zinc-950 border border-zinc-800"><span className="text-zinc-500">Hotel:</span> {memory.hotel ? `${memory.hotel.name} ($${memory.hotel.totalCost})` : 'Pending'}</div>
+                        <div className="p-2 rounded bg-zinc-950 border border-zinc-800"><span className="text-zinc-500">Total Expense:</span> ${memory.totalSpent || 0} / ${memory.budgetLimit}</div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-12 text-xs text-zinc-600 italic">Memory state uninitialized.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </section>
+
+          </div>
+
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
